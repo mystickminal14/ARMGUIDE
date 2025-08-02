@@ -1,3 +1,4 @@
+// main.dart
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -106,7 +107,13 @@ class _MountainOverlayState extends State<MountainOverlay> {
       double relativeBearing = (bearing - _azimuth + 540) % 360 - 180;
       if (relativeBearing.abs() < fov / 2 && _pitch < 0.6) {
         final distance = _calculateDistance(_lat, _lon, m['lat'], m['lon']);
-        visible.add({"name": m['name'], "bearing": bearing, "distance": distance, "rel": relativeBearing});
+        visible.add({
+          "name": m['name'],
+          "bearing": bearing,
+          "distance": distance,
+          "rel": relativeBearing,
+          "ele": m['ele']
+        });
       }
     }
     visible.sort((a, b) => a['distance'].compareTo(b['distance']));
@@ -167,6 +174,26 @@ class _MountainOverlayState extends State<MountainOverlay> {
 
   double _degToRad(double deg) => deg * math.pi / 180;
 
+  void _showMountainDetails(Map<String, dynamic> m) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(m['name']),
+        content: Text(
+          "Distance: ${m['distance'].toStringAsFixed(1)} km\n"
+              "Bearing: ${m['bearing'].toStringAsFixed(1)}°\n"
+              "Elevation: ${m['ele'].toStringAsFixed(0)} m",
+        ),
+        actions: [
+          TextButton(
+            child: const Text("Close"),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _cameraController.dispose();
@@ -177,11 +204,56 @@ class _MountainOverlayState extends State<MountainOverlay> {
   @override
   Widget build(BuildContext context) {
     final screen = MediaQuery.of(context).size;
-
     final maxElevation = _elevationProfile.isNotEmpty ? _elevationProfile.reduce(math.max) : 1;
     final minElevation = _elevationProfile.isNotEmpty ? _elevationProfile.reduce(math.min) : 0;
     final scale = screen.height * 0.2 / (maxElevation - minElevation);
     final midY = screen.height * 0.5;
+
+    final Map<int, List<Map<String, dynamic>>> xBuckets = {};
+    for (var m in _visibleMountains) {
+      double rel = m['rel'];
+      double x = ((rel + 30) / 60) * screen.width;
+      int bucket = (x / 20).floor();
+      xBuckets.putIfAbsent(bucket, () => []).add(m..['x'] = x);
+    }
+
+    List<Widget> stackedCards = [];
+    xBuckets.forEach((bucket, mountainList) {
+      mountainList.sort((a, b) => a['distance'].compareTo(b['distance']));
+      for (int i = 0; i < mountainList.length; i++) {
+        var m = mountainList[i];
+        double x = m['x'].clamp(0, screen.width - 100);
+        int index = ((m['rel'] + 30) / 60 * (_elevationProfile.length - 1)).round();
+        index = index.clamp(0, _elevationProfile.length - 1);
+        double elevation = _elevationProfile.isNotEmpty ? _elevationProfile[index] : 0;
+        double y = midY - (elevation - minElevation) * scale - 40 + i * 50;
+
+        stackedCards.add(Positioned(
+          left: x,
+          top: y.clamp(0, screen.height - 80),
+          child: GestureDetector(
+            onTap: () => _showMountainDetails(m),
+            child: Transform.rotate(
+              angle: -60 * math.pi / 180,
+              alignment: Alignment.topLeft,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.7),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white, width: 1),
+                ),
+                child: Text(
+                  "${m['name']}\n${m['distance'].toStringAsFixed(1)} km",
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                ),
+              ),
+            ),
+          ),
+        ));
+      }
+    });
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -194,40 +266,30 @@ class _MountainOverlayState extends State<MountainOverlay> {
 
           CustomPaint(
             size: screen,
-            painter: TerrainPainter(
-              elevationProfile: _elevationProfile,
-              sunAngle: _sunAngle,
-            ),
+            painter: TerrainPainter(elevationProfile: _elevationProfile),
           ),
 
-          // Mountain labels above terrain
-          ..._visibleMountains.map((m) {
-            double rel = m['rel'];
-            double x = ((rel + 30) / 60) * screen.width;
+          ...stackedCards,
 
-            int index = ((rel + 30) / 60 * (_elevationProfile.length - 1)).round();
-            index = index.clamp(0, _elevationProfile.length - 1);
-            double elevation = _elevationProfile.isNotEmpty ? _elevationProfile[index] : 0;
-            double y = midY - (elevation - minElevation) * scale - 40;
-
-            return Positioned(
-              left: x.clamp(0, screen.width - 100),
-              top: y.clamp(0, screen.height - 100),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.6),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.white, width: 1),
-                ),
-                child: Text(
-                  "${m['name']}\n${m['distance'].toStringAsFixed(1)} km",
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                ),
+          Positioned(
+            bottom: 120,
+            left: 10,
+            right: 10,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: _visibleMountains.map((m) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                    child: ElevatedButton(
+                      onPressed: () => _showMountainDetails(m),
+                      child: Text(m['name']),
+                    ),
+                  );
+                }).toList(),
               ),
-            );
-          }),
+            ),
+          ),
 
           Positioned(
             bottom: 40,
@@ -250,16 +312,6 @@ class _MountainOverlayState extends State<MountainOverlay> {
               ],
             ),
           ),
-
-          Positioned(
-            top: 40,
-            right: 20,
-            child: Icon(
-              _isDaytime ? Icons.wb_sunny_rounded : Icons.nightlight_round,
-              color: Colors.yellowAccent,
-              size: 36,
-            ),
-          ),
         ],
       ),
     );
@@ -268,12 +320,8 @@ class _MountainOverlayState extends State<MountainOverlay> {
 
 class TerrainPainter extends CustomPainter {
   final List<double> elevationProfile;
-  final double sunAngle;
 
-  TerrainPainter({
-    required this.elevationProfile,
-    required this.sunAngle,
-  });
+  TerrainPainter({required this.elevationProfile});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -284,12 +332,6 @@ class TerrainPainter extends CustomPainter {
     final minElevation = elevationProfile.reduce(math.min);
     final midY = size.height * 0.5;
     final scale = size.height * 0.2 / (maxElevation - minElevation);
-
-    final glowPaint = Paint()
-      ..color = Colors.white.withOpacity(0.2)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
 
     final linePaint = Paint()
       ..color = Colors.white
@@ -306,18 +348,7 @@ class TerrainPainter extends CustomPainter {
       }
     }
 
-    canvas.drawPath(path, glowPaint);
     canvas.drawPath(path, linePaint);
-
-    final sunX = size.width / 2;
-    final sunY = midY - (sunAngle / 90.0) * size.height * 0.4;
-    final sunPaint = Paint()
-      ..shader = RadialGradient(
-        colors: [Colors.yellowAccent, Colors.transparent],
-      ).createShader(Rect.fromCircle(center: Offset(sunX, sunY), radius: 30));
-
-    canvas.drawCircle(Offset(sunX, sunY), 30, sunPaint);
-    canvas.drawCircle(Offset(sunX, sunY), 5, Paint()..color = Colors.yellowAccent);
   }
 
   @override
